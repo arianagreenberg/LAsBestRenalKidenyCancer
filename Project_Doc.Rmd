@@ -1,0 +1,157 @@
+---
+title: "Project_Code"
+author: "Ariana Greenberg"
+date: "2025-06-24"
+output: html_document
+---
+
+
+```{r setup, include=FALSE}
+knitr::opts_chunk$set(echo = TRUE)
+```
+
+loading in data
+```{r, echo= F, include = F }
+
+library(BiocManager)
+#BiocManager::install("SingleCellExperiment")
+library(SingleCellExperiment)
+#setwd("")
+load("/Users/arianagreenberg/Desktop/Las BeST/LAsBeST project/sce.Rdata") #directly to file
+```
+
+
+```{r}
+gene_counts = counts(sce)
+
+cell_level = colData(sce)
+
+```
+
+
+
+TABLE1 #whole group, overall
+```{r}
+library(table1) #check R documentation if needed
+library(tidyverse)
+str(gene_counts)
+
+cell_level_2 <- data.frame(cell_level)
+
+cell_level_2 <- cell_level_2 %>% 
+  group_by(sample) %>% 
+  summarize(
+    nGene_sum = sum(nGene),
+    nUMI_sum = sum(nUMI),
+    percent_mito_avg = mean(percent_mito, na.rm = TRUE),
+    doublet_score_avg = mean(doublet_score, na.rm = TRUE),
+    type = factor(unique(type), levels = c("N", "T"), labels = c("Normal", "Tumor")),
+    stage = factor(unique(stage), levels = c("locAdv", "metast", "early"), labels = c("Locally Advanced", "Metastatic", "Early"))
+  )
+
+label(cell_level_2$nGene_sum) <- "Sum of Genes"
+label(cell_level_2$nUMI_sum) <- "Sum of Unique Molecular Identifiers"
+label(cell_level_2$percent_mito_avg) <- "RNA Originating from Mitochondrial Genes"
+label(cell_level_2$doublet_score_avg) <- "Two or more Cells Captured Together"
+label(cell_level_2$stage) <- "Stage of Cancer Progression"
+label(cell_level_2$type) <- "Sample from Kidney Environment"
+
+caption  <- "Overview of Dataset"
+footnote <- "Summary of Main Variables"
+
+table1(~  nGene_sum + nUMI_sum + percent_mito_avg + doublet_score_avg + stage + type, data = cell_level_2, , caption=caption, footnote=footnote)
+```
+
+
+
+```{r}
+cell_level_3 <- data.frame(cell_level)
+ggplot(cell_level_3, aes(x =sample, y= nGene)) + geom_boxplot(color = "red", outlier.colour = "yellow")
+ggplot(cell_level_3, aes(x =type, y= nGene)) + geom_boxplot()
+ggplot(cell_level_3, aes(x =stage, y= nGene)) + geom_boxplot()
+```
+idea behind normalization using Seurat
+
+1) proportions 
+```{r}
+cpm <- 10000* t(t(counts(sce)))/colSums(counts(sce))
+
+```
+
+2) log transformation for normalization 
+```{r}
+logNorm <- log1p(cpm)
+```
+
+pca and umap 
+
+Code for data dimensionality reduction
+```{r}
+library(Seurat)
+library(Matrix)
+
+# Subset count matrix (genes x cells)
+subset_counts <- gene_counts[1:1000, 1:1000]
+
+#metadata is the same length as count matrix
+subset_meta <- cell_level[1:1000, , drop = F] #drop F keeps in vector
+
+# convert to data frame
+subset_meta <- as.data.frame(subset_meta)
+
+# Create Seurat object from subset
+seurat_obj_base <- CreateSeuratObject(counts = subset_counts, meta.data = subset_meta)
+```
+
+
+Normalize Data Function
+```{r}
+
+# Preprocessing pipeline
+seurat_obj <- NormalizeData(seurat_obj_base)
+seurat_obj <- FindVariableFeatures(seurat_obj)  # Recommended before scaling
+seurat_obj <- ScaleData(seurat_obj)
+seurat_obj <- RunPCA(seurat_obj)
+seurat_obj <- RunUMAP(seurat_obj, dims = 1:10)
+
+# Visualization
+DimPlot(seurat_obj, reduction = "umap")
+
+
+```
+
+
+sctransform normalization 
+
+negative binomial regression for single-cell normalization
+1) generalized linear models to fit model parameters for each gene in the transcriptome using sequencing depth as co-variate
+2) kernel regression
+3) NB regression 
+4) Pearson's residuals 
+```{r}
+
+seurat_obj_1 <- SCTransform(seurat_obj_base)
+seurat_obj <- RunPCA(seurat_obj_1)
+seurat_obj <- RunUMAP(seurat_obj, dims = 1:10)
+seurat_obj <- FindNeighbors(seurat_obj, dims = 1:10)
+seurat_obj <- FindClusters(seurat_obj)
+
+# Visualization
+DimPlot(seurat_obj, reduction = "umap")
+
+```
+scry
+```{r}
+library(scry)
+
+deviance_scores <- devianceFeatureSelection(sce, fam = "poisson")
+
+ggplot(deviance_scores, aes( x= log_deviance)) + geom_histogram() 
+```
+
+
+
+null residuals
+```{r}
+
+```
