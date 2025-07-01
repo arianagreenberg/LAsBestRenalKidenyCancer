@@ -1,0 +1,268 @@
+---
+title: "Project test"
+author: "Darcy Green"
+date: "2025-06-20"
+output: html_document
+---
+
+```{r setup, include=FALSE}
+knitr::opts_chunk$set(echo = TRUE)
+```
+
+```{r, warning = FALSE}
+library(SingleCellExperiment)
+```
+
+```{r}
+library(dplyr)
+library(stringr)
+library(ggplot2)
+library(tidyr)
+library(tidytext)
+library(tidyverse)
+library(boot)
+library(table1)
+library(Seurat)
+```
+
+
+```{r}
+load("/Users/mom/Downloads/Archive/sce.Rdata")
+```
+
+```{r}
+#sparse matrix with genes and cells, represents number of molecules of each gene's RNA in each cell
+gene_counts <- counts(sce)
+gene_counts[1:5, 1:5]
+```
+
+```{r}
+colData <- colData(sce)
+colData
+```
+```{r}
+head(colData$nGene)
+```
+
+```{r}
+colData2 <- data.frame(colData) |>
+  group_by(factor(sample)) |>
+  summarize(nGene_sum=sum(nGene), 
+        nGene_mean=mean(nGene, na.rm = TRUE),
+        nUMI_sum=sum(nUMI),
+        nUMI_mean=mean(nUMI, na.rm = TRUE),
+        percent_mito_mean=mean(percent_mito, na.rm = TRUE), #cell level percentage
+        doublet_score_mean=mean(doublet_score, na.rm = TRUE), 
+        type=factor(unique(type)),
+        stage=factor(unique(stage)))
+```
+
+```{r}
+colData2
+```
+```{r}
+#by sample
+#do UMI and nGene by cell, another table for patient/sample level with stage/type
+table1(~ nGene_sum + nGene_mean + nUMI_sum + nUMI_mean + percent_mito_mean + doublet_score_mean + stage + type, data=colData2)
+```
+
+
+```{r}
+library(tidyverse)
+colData3 <- data.frame(colData) |>
+  mutate(sample = factor(sample),
+         type = factor(type),
+         stage = factor(stage))
+
+ggplot(colData3, aes(x = sample, y = nGene)) +
+      geom_boxplot(fill = "green") +
+  labs(x="Sample", y = "Number of Genes", title = "Number of Genes by Sample") #each dot represents a cell
+
+#greater sequencing depth for some samples
+#correlation: more genes = higher counts, varitation in chem thing
+```
+```{r}
+ggplot(colData3, aes(x = type, y = nGene, fill = type)) +
+      geom_boxplot() +
+    scale_fill_manual(values = c("green", "red")) +
+    labs(y= "Number of Genes", x="Sample Type (tumor or normal)", title = "Number of Genes by Sample Type")
+```
+```{r}
+ggplot(colData3, aes(x = stage, y = nGene, fill=stage)) +
+      geom_boxplot() +
+  scale_fill_manual(values = c("green", "yellow", "red")) +
+  labs(y="Number of Genes", x="Stage", title = "Number of Genes by Tumor Stage")
+```
+```{r}
+ggplot(colData2, aes(x=stage)) +
+  geom_bar(fill="lightblue")
+```
+```{r}
+ggplot(colData2, aes(x=type)) +
+  geom_bar(fill="lightblue")
+```
+
+```{r}
+ggplot(colData2, aes(x=type)) +
+  geom_bar(fill="lightblue")
+```
+
+
+```{r}
+sce_sample <- sce[1:5, ]
+```
+
+## SEURAT
+
+```{r}
+
+#subset sparse matrix to make this faster
+subset_counts <- gene_counts[1:1000, 1:1000]
+
+#make the col data the same lenth as the new matrix data
+subset_meta <- colData[1:1000, , drop=F]
+
+#convert the new col meta data to a dataframe for future procesing
+subset_meta <- as.data.frame(subset_meta)
+
+#Create seurat pbject (transpose matrix built into the function and combine the two new subsetted data frames) we have cell on x, rna on y
+seurat_gene_counts <- CreateSeuratObject(counts = subset_counts, meta.data = subset_meta)
+
+#log normalization (UMI count divided by total UMI's in cell, scale by 10,000, ln val)
+seurat_gene_counts <- NormalizeData(seurat_gene_counts) 
+
+# find highly variable features, useful downstream for clustering, because much gene expression is noisy and the same across cells
+seurat_gene_counts <- FindVariableFeatures(seurat_gene_counts, selection.method = "vst", nfeatures=2000) 
+
+#subtract mean to center and divide by SD to scale
+seurat_gene_counts <- ScaleData(seurat_gene_counts) 
+
+# PC's are linear combinations of original genes
+seurat_gene_counts <- RunPCA(seurat_gene_counts)
+
+#run UMAP
+seurat_gene_counts <- RunUMAP(seurat_gene_counts, dims = 1:50) # uses first 10 PC's to visualize
+```
+
+```{r}
+# plot the PCA
+DimPlot(seurat_gene_counts, reduction = "umap")
+
+# x axis captures largest source of variation
+# y axis captures second largest source of variation (orthogonal to PC1)
+# where each cell lies based on these two dimensions
+# cells that are closer together have more similar gene expression
+```
+
+```{r}
+seurat_gene_counts <- FindNeighbors(seurat_gene_counts, dims = 1:10)
+seurat_gene_counts <- FindClusters(seurat_gene_counts, resolution = 0.6, algorithm = 3)
+
+```
+```{r}
+head(counts(sce))
+```
+
+
+```{r}
+hist(counts(sce)[155,], breaks=50, main='total counts of expression in Gene 155')
+```
+
+```{r}
+# problems with data
+# this tells us how many RNAs we got for each cell
+#small variation in chemistry due to amplification in exponential PCR means that we have a weird distribution; e.g. difference in total rna counts per cell
+hist(colSums(counts(sce)), main='total counts per cell', breaks = 50)
+```
+
+```{r}
+#counts per million matrix
+#have to transpose then transpose back BUT we still have this really long tail
+cpm <- 10000*t(t(counts(sce)) / colSums(counts(sce)))
+hist(counts(sce)[155,], breaks=50)
+```
+
+```{r}
+hist(counts(sce)[155,], breaks=50)
+```
+
+
+```{r}
+# so we take the log but add 1 since log of 0 is -inf which would increase outliers!
+logNorm <- log1p(cpm)
+```
+
+```{r}
+# plot of this new logNorm matrix, looks more normal but we have hella outliers at 0 still
+hist(logNorm[155,], breaks=50)
+```
+
+
+## Let's try sctransform
+```{r}
+
+```
+
+## Let's try scry
+
+```{r}
+#install scry
+if (!require("BiocManager", quietly = TRUE))
+    install.packages("BiocManager")
+
+BiocManager::install("scry")
+```
+
+```{r}
+library(scry)
+```
+
+```{r}
+#calculate deviance compared to null model (either binomial or poisson)
+# Compute deviance statistics for each gene. and we can show distribution of these deviances, weed out genes that aren't important and then use PCA UMAP on those genes. 
+
+#deviance calculations and sort
+sce_scry <- devianceFeatureSelection(sce, fam = "poisson", batch = NULL)
+
+```
+
+```{r}
+#extract deviances from the sce_scry poisson_deviance column
+deviances <- rowData(sce_scry)$poisson_deviance
+
+#turn into data frame
+dev_df <- data.frame(deviance = deviances)
+
+#plot it
+ggplot(dev_df, aes(x = deviance)) +
+  geom_histogram(bins = 50, fill = "steelblue", color = "white") +
+  theme_minimal() +
+  labs(title = "Distribution of Poisson Deviance",
+       x = "Deviance",
+       y = "Number of Genes")
+
+```
+
+```{r}
+summary(dev_df)
+```
+```{r}
+ggplot(dev_df, aes(x = deviance)) +
+  geom_histogram(bins = 50, fill = "steelblue", color = "white") +
+  coord_cartesian(xlim = c(0, quantile(dev_df$deviance, 0.99))) +  # zoom into 99th percentile
+  theme_minimal() +
+  labs(title = "Zoomed-in Distribution of Poisson Deviance",
+       x = "Deviance",
+       y = "Number of Genes")
+```
+```{r}
+dev_df$log_deviance <- log1p(dev_df$deviance)  # log1p = log(1 + x), handles zeros safely
+
+ggplot(dev_df, aes(x = log_deviance)) +
+  geom_histogram(bins = 50, fill = "steelblue", color = "white") +
+  theme_minimal() +
+  labs(title = "Log-Transformed Distribution of Poisson Deviance",
+       x = "log(1 + Deviance)",
+       y = "Number of Genes")
+```
+
